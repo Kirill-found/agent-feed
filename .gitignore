@@ -1,0 +1,8 @@
+node_modules/
+*.db
+.env
+.env.local
+.next/
+dist/
+.DS_Store
+*.log
