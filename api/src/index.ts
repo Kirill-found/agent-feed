@@ -189,10 +189,66 @@ db.run(`
 `)
 db.run("CREATE INDEX IF NOT EXISTS idx_reposts_post ON reposts(post_id)")
 
+// Bookmarks table
+db.run(`
+  CREATE TABLE IF NOT EXISTS bookmarks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER NOT NULL,
+    user_type TEXT NOT NULL,
+    user_id INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(post_id, user_type, user_id)
+  )
+`)
+db.run("CREATE INDEX IF NOT EXISTS idx_bookmarks_user ON bookmarks(user_type, user_id)")
+db.run("CREATE INDEX IF NOT EXISTS idx_bookmarks_post ON bookmarks(post_id)")
+
+// Notifications table
+db.run(`
+  CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    actor_type TEXT NOT NULL,
+    actor_id INTEGER NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    post_id INTEGER,
+    read INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`)
+db.run("CREATE INDEX IF NOT EXISTS idx_notifications_target ON notifications(target_type, target_id, read)")
+db.run("CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC)")
+
 app.use('/*', cors())
 
+// ========== NOTIFICATION HELPERS ==========
+
+function createNotification(
+  type: 'like' | 'follow' | 'repost' | 'comment' | 'reply',
+  actorType: string,
+  actorId: number,
+  targetType: string,
+  targetId: number,
+  postId?: number
+) {
+  // Don't notify yourself
+  if (actorType === targetType && actorId === targetId) return
+  
+  db.prepare(`
+    INSERT INTO notifications (type, actor_type, actor_id, target_type, target_id, post_id)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(type, actorType, actorId, targetType, targetId, postId || null)
+}
+
+// Helper to check if post is bookmarked
+function isBookmarked(postId: number, userType: string | undefined, userId: number | undefined): boolean {
+  if (!userType || !userId) return false
+  return !!db.prepare('SELECT id FROM bookmarks WHERE post_id = ? AND user_type = ? AND user_id = ?').get(postId, userType, userId)
+}
+
 // Health check
-app.get('/', (c) => c.json({ status: 'ok', name: 'Agent Feed API', version: '0.2.0' }))
+app.get('/', (c) => c.json({ status: 'ok', name: 'Agent Feed API', version: '0.3.0' }))
 
 // ========== AUTH ==========
 
@@ -447,6 +503,8 @@ app.post('/users/:username/follow', (c) => {
     db.prepare(
       'INSERT INTO follows (follower_type, follower_id, following_type, following_id) VALUES (?, ?, ?, ?)'
     ).run(authUser.type, authUser.id, targetType, target.id)
+    // Notify followed user
+    createNotification('follow', authUser.type, authUser.id, targetType, target.id)
     return c.json({ success: true, following: true })
   } catch {
     // Already following - unfollow
@@ -598,14 +656,15 @@ app.get('/users/:username/posts', (c) => {
     LIMIT ? OFFSET ?
   `).all(target.name, target.username, target.avatar_url, targetType, target.id, limit, offset)
   
-  // Add is_liked, is_reposted for auth user
+  // Add is_liked, is_reposted, is_bookmarked for auth user
   const postsWithStatus = posts.map((post: any) => {
-    let is_liked = false, is_reposted = false
+    let is_liked = false, is_reposted = false, is_bookmarked = false
     if (authUser) {
       is_liked = !!db.prepare('SELECT id FROM likes WHERE post_id = ? AND liker_type = ? AND liker_id = ?').get(post.id, authUser.type, authUser.id)
       is_reposted = !!db.prepare('SELECT id FROM reposts WHERE post_id = ? AND reposter_type = ? AND reposter_id = ?').get(post.id, authUser.type, authUser.id)
+      is_bookmarked = !!db.prepare('SELECT id FROM bookmarks WHERE post_id = ? AND user_type = ? AND user_id = ?').get(post.id, authUser.type, authUser.id)
     }
-    return { ...post, is_liked, is_reposted }
+    return { ...post, is_liked, is_reposted, is_bookmarked }
   })
   
   return c.json({ posts: postsWithStatus })
@@ -687,11 +746,12 @@ app.get('/feed', (c) => {
     limit, offset
   )
   
-  // Add is_liked, is_reposted
+  // Add is_liked, is_reposted, is_bookmarked
   const postsWithStatus = posts.map((post: any) => {
     const is_liked = !!db.prepare('SELECT id FROM likes WHERE post_id = ? AND liker_type = ? AND liker_id = ?').get(post.id, authUser.type, authUser.id)
     const is_reposted = !!db.prepare('SELECT id FROM reposts WHERE post_id = ? AND reposter_type = ? AND reposter_id = ?').get(post.id, authUser.type, authUser.id)
-    return { ...post, is_liked, is_reposted }
+    const is_bookmarked = !!db.prepare('SELECT id FROM bookmarks WHERE post_id = ? AND user_type = ? AND user_id = ?').get(post.id, authUser.type, authUser.id)
+    return { ...post, is_liked, is_reposted, is_bookmarked }
   })
   
   return c.json({ posts: postsWithStatus })
@@ -730,14 +790,15 @@ app.get('/posts', (c) => {
     LIMIT ? OFFSET ?
   `).all(limit, offset)
   
-  // Add is_liked, is_reposted for auth user
+  // Add is_liked, is_reposted, is_bookmarked for auth user
   const postsWithStatus = posts.map((post: any) => {
-    let is_liked = false, is_reposted = false
+    let is_liked = false, is_reposted = false, is_bookmarked = false
     if (authUser) {
       is_liked = !!db.prepare('SELECT id FROM likes WHERE post_id = ? AND liker_type = ? AND liker_id = ?').get(post.id, authUser.type, authUser.id)
       is_reposted = !!db.prepare('SELECT id FROM reposts WHERE post_id = ? AND reposter_type = ? AND reposter_id = ?').get(post.id, authUser.type, authUser.id)
+      is_bookmarked = !!db.prepare('SELECT id FROM bookmarks WHERE post_id = ? AND user_type = ? AND user_id = ?').get(post.id, authUser.type, authUser.id)
     }
-    return { ...post, is_liked, is_reposted }
+    return { ...post, is_liked, is_reposted, is_bookmarked }
   })
   
   return c.json({ posts: postsWithStatus })
@@ -825,24 +886,26 @@ app.get('/posts/:id', (c) => {
     `).get(post.reply_to_id)
   }
   
-  // Add is_liked, is_reposted
-  let is_liked = false, is_reposted = false
+  // Add is_liked, is_reposted, is_bookmarked
+  let is_liked = false, is_reposted = false, is_bookmarked = false
   if (authUser) {
     is_liked = !!db.prepare('SELECT id FROM likes WHERE post_id = ? AND liker_type = ? AND liker_id = ?').get(postId, authUser.type, authUser.id)
     is_reposted = !!db.prepare('SELECT id FROM reposts WHERE post_id = ? AND reposter_type = ? AND reposter_id = ?').get(postId, authUser.type, authUser.id)
+    is_bookmarked = !!db.prepare('SELECT id FROM bookmarks WHERE post_id = ? AND user_type = ? AND user_id = ?').get(postId, authUser.type, authUser.id)
   }
   
   const repliesWithStatus = replies.map((reply: any) => {
-    let r_is_liked = false, r_is_reposted = false
+    let r_is_liked = false, r_is_reposted = false, r_is_bookmarked = false
     if (authUser) {
       r_is_liked = !!db.prepare('SELECT id FROM likes WHERE post_id = ? AND liker_type = ? AND liker_id = ?').get(reply.id, authUser.type, authUser.id)
       r_is_reposted = !!db.prepare('SELECT id FROM reposts WHERE post_id = ? AND reposter_type = ? AND reposter_id = ?').get(reply.id, authUser.type, authUser.id)
+      r_is_bookmarked = !!db.prepare('SELECT id FROM bookmarks WHERE post_id = ? AND user_type = ? AND user_id = ?').get(reply.id, authUser.type, authUser.id)
     }
-    return { ...reply, is_liked: r_is_liked, is_reposted: r_is_reposted }
+    return { ...reply, is_liked: r_is_liked, is_reposted: r_is_reposted, is_bookmarked: r_is_bookmarked }
   })
   
   return c.json({ 
-    post: { ...post, is_liked, is_reposted },
+    post: { ...post, is_liked, is_reposted, is_bookmarked },
     parent,
     replies: repliesWithStatus
   })
@@ -882,6 +945,14 @@ app.post('/posts', async (c) => {
     const stmt = db.prepare('INSERT INTO posts (content, author_type, author_id, reply_to_id) VALUES (?, ?, ?, ?)')
     const result = stmt.run(content, 'agent', agent.id, reply_to_id || null)
     
+    // Notify parent post author about reply
+    if (reply_to_id) {
+      const parentPost = db.prepare('SELECT author_type, author_id FROM posts WHERE id = ?').get(reply_to_id) as any
+      if (parentPost) {
+        createNotification('reply', 'agent', agent.id, parentPost.author_type, parentPost.author_id, reply_to_id)
+      }
+    }
+    
     return c.json({ 
       id: result.lastInsertRowid, 
       author: agent.name, 
@@ -900,6 +971,14 @@ app.post('/posts', async (c) => {
       const result = stmt.run(content, 'human', decoded.id, reply_to_id || null)
       
       const user = db.prepare('SELECT name, username FROM users WHERE id = ?').get(decoded.id) as any
+      
+      // Notify parent post author about reply
+      if (reply_to_id) {
+        const parentPost = db.prepare('SELECT author_type, author_id FROM posts WHERE id = ?').get(reply_to_id) as any
+        if (parentPost) {
+          createNotification('reply', 'human', decoded.id, parentPost.author_type, parentPost.author_id, reply_to_id)
+        }
+      }
       
       return c.json({ 
         id: result.lastInsertRowid, 
@@ -922,6 +1001,10 @@ app.post('/posts/:id/like', async (c) => {
   
   if (!authUser) return c.json({ error: 'Unauthorized' }, 401)
   
+  // Get post to notify author
+  const post = db.prepare('SELECT author_type, author_id FROM posts WHERE id = ?').get(postId) as any
+  if (!post) return c.json({ error: 'Post not found' }, 404)
+  
   const existing = db.prepare('SELECT id FROM likes WHERE post_id = ? AND liker_type = ? AND liker_id = ?')
     .get(postId, authUser.type, authUser.id)
   
@@ -932,6 +1015,8 @@ app.post('/posts/:id/like', async (c) => {
   } else {
     db.prepare('INSERT INTO likes (post_id, liker_type, liker_id) VALUES (?, ?, ?)')
       .run(postId, authUser.type, authUser.id)
+    // Notify post author about like
+    createNotification('like', authUser.type, authUser.id, post.author_type, post.author_id, Number(postId))
     return c.json({ success: true, liked: true })
   }
 })
@@ -962,8 +1047,82 @@ app.post('/posts/:id/repost', async (c) => {
   } else {
     db.prepare('INSERT INTO reposts (post_id, reposter_type, reposter_id) VALUES (?, ?, ?)')
       .run(postId, authUser.type, authUser.id)
+    // Notify post author about repost
+    createNotification('repost', authUser.type, authUser.id, post.author_type, post.author_id, post.id)
     return c.json({ success: true, reposted: true })
   }
+})
+
+// Bookmark (toggle)
+app.post('/posts/:id/bookmark', async (c) => {
+  const postId = c.req.param('id')
+  const authUser = getAuthUser(c.req.header('Authorization'))
+  
+  if (!authUser) return c.json({ error: 'Unauthorized' }, 401)
+  
+  // Check post exists
+  const post = db.prepare('SELECT id FROM posts WHERE id = ?').get(postId)
+  if (!post) return c.json({ error: 'Post not found' }, 404)
+  
+  const existing = db.prepare('SELECT id FROM bookmarks WHERE post_id = ? AND user_type = ? AND user_id = ?')
+    .get(postId, authUser.type, authUser.id)
+  
+  if (existing) {
+    db.prepare('DELETE FROM bookmarks WHERE post_id = ? AND user_type = ? AND user_id = ?')
+      .run(postId, authUser.type, authUser.id)
+    return c.json({ success: true, bookmarked: false })
+  } else {
+    db.prepare('INSERT INTO bookmarks (post_id, user_type, user_id) VALUES (?, ?, ?)')
+      .run(postId, authUser.type, authUser.id)
+    return c.json({ success: true, bookmarked: true })
+  }
+})
+
+// Get user's bookmarks
+app.get('/bookmarks', (c) => {
+  const authUser = getAuthUser(c.req.header('Authorization'))
+  if (!authUser) return c.json({ error: 'Unauthorized' }, 401)
+  
+  const limit = Number(c.req.query('limit')) || 50
+  const offset = Number(c.req.query('offset')) || 0
+  
+  const posts = db.prepare(`
+    SELECT 
+      p.*,
+      CASE 
+        WHEN p.author_type = 'human' THEN u.name
+        WHEN p.author_type = 'agent' THEN a.name
+      END as author_name,
+      CASE 
+        WHEN p.author_type = 'human' THEN u.username
+        WHEN p.author_type = 'agent' THEN a.username
+      END as author_username,
+      CASE 
+        WHEN p.author_type = 'human' THEN u.avatar_url
+        WHEN p.author_type = 'agent' THEN a.avatar_url
+      END as author_avatar_url,
+      (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
+      (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
+      (SELECT COUNT(*) FROM reposts WHERE post_id = p.id) as repost_count,
+      (SELECT COUNT(*) FROM posts WHERE reply_to_id = p.id) as reply_count,
+      b.created_at as bookmarked_at
+    FROM bookmarks b
+    JOIN posts p ON b.post_id = p.id
+    LEFT JOIN users u ON p.author_type = 'human' AND p.author_id = u.id
+    LEFT JOIN agents a ON p.author_type = 'agent' AND p.author_id = a.id
+    WHERE b.user_type = ? AND b.user_id = ?
+    ORDER BY b.created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(authUser.type, authUser.id, limit, offset)
+  
+  // Add is_liked, is_reposted, is_bookmarked
+  const postsWithStatus = posts.map((post: any) => {
+    const is_liked = !!db.prepare('SELECT id FROM likes WHERE post_id = ? AND liker_type = ? AND liker_id = ?').get(post.id, authUser.type, authUser.id)
+    const is_reposted = !!db.prepare('SELECT id FROM reposts WHERE post_id = ? AND reposter_type = ? AND reposter_id = ?').get(post.id, authUser.type, authUser.id)
+    return { ...post, is_liked, is_reposted, is_bookmarked: true }
+  })
+  
+  return c.json({ posts: postsWithStatus })
 })
 
 // Comment on post
@@ -1005,6 +1164,12 @@ app.post('/posts/:id/comment', async (c) => {
   const stmt = db.prepare('INSERT INTO comments (post_id, content, author_type, author_id) VALUES (?, ?, ?, ?)')
   const result = stmt.run(postId, content, authorType, authorId)
   
+  // Notify post author about comment
+  const post = db.prepare('SELECT author_type, author_id FROM posts WHERE id = ?').get(postId) as any
+  if (post) {
+    createNotification('comment', authorType, authorId, post.author_type, post.author_id, Number(postId))
+  }
+  
   return c.json({ id: result.lastInsertRowid, author: authorName, author_type: authorType, content })
 })
 
@@ -1035,6 +1200,91 @@ app.get('/posts/:id/comments', (c) => {
   `).all(postId)
   
   return c.json({ comments })
+})
+
+// ========== NOTIFICATIONS ==========
+
+// Get notifications
+app.get('/notifications', (c) => {
+  const authUser = getAuthUser(c.req.header('Authorization'))
+  if (!authUser) return c.json({ error: 'Unauthorized' }, 401)
+  
+  const limit = Number(c.req.query('limit')) || 50
+  const offset = Number(c.req.query('offset')) || 0
+  const unread_only = c.req.query('unread') === 'true'
+  
+  const readFilter = unread_only ? 'AND n.read = 0' : ''
+  
+  const notifications = db.prepare(`
+    SELECT 
+      n.*,
+      CASE 
+        WHEN n.actor_type = 'human' THEN u.name
+        WHEN n.actor_type = 'agent' THEN a.name
+      END as actor_name,
+      CASE 
+        WHEN n.actor_type = 'human' THEN u.username
+        WHEN n.actor_type = 'agent' THEN a.username
+      END as actor_username,
+      CASE 
+        WHEN n.actor_type = 'human' THEN u.avatar_url
+        WHEN n.actor_type = 'agent' THEN a.avatar_url
+      END as actor_avatar_url,
+      p.content as post_content
+    FROM notifications n
+    LEFT JOIN users u ON n.actor_type = 'human' AND n.actor_id = u.id
+    LEFT JOIN agents a ON n.actor_type = 'agent' AND n.actor_id = a.id
+    LEFT JOIN posts p ON n.post_id = p.id
+    WHERE n.target_type = ? AND n.target_id = ? ${readFilter}
+    ORDER BY n.created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(authUser.type, authUser.id, limit, offset)
+  
+  // Get unread count
+  const unread_count = (db.prepare(`
+    SELECT COUNT(*) as c FROM notifications 
+    WHERE target_type = ? AND target_id = ? AND read = 0
+  `).get(authUser.type, authUser.id) as any).c
+  
+  return c.json({ notifications, unread_count })
+})
+
+// Mark notifications as read
+app.post('/notifications/read', async (c) => {
+  const authUser = getAuthUser(c.req.header('Authorization'))
+  if (!authUser) return c.json({ error: 'Unauthorized' }, 401)
+  
+  const { ids } = await c.req.json()
+  
+  if (ids && Array.isArray(ids) && ids.length > 0) {
+    // Mark specific notifications as read
+    const placeholders = ids.map(() => '?').join(',')
+    db.prepare(`
+      UPDATE notifications SET read = 1 
+      WHERE id IN (${placeholders}) AND target_type = ? AND target_id = ?
+    `).run(...ids, authUser.type, authUser.id)
+  } else {
+    // Mark all as read
+    db.prepare(`
+      UPDATE notifications SET read = 1 
+      WHERE target_type = ? AND target_id = ?
+    `).run(authUser.type, authUser.id)
+  }
+  
+  return c.json({ success: true })
+})
+
+// Get unread notification count
+app.get('/notifications/count', (c) => {
+  const authUser = getAuthUser(c.req.header('Authorization'))
+  if (!authUser) return c.json({ error: 'Unauthorized' }, 401)
+  
+  const count = (db.prepare(`
+    SELECT COUNT(*) as c FROM notifications 
+    WHERE target_type = ? AND target_id = ? AND read = 0
+  `).get(authUser.type, authUser.id) as any).c
+  
+  return c.json({ unread_count: count })
 })
 
 // ========== SEARCH ==========
@@ -1080,14 +1330,15 @@ app.get('/search', (c) => {
       LIMIT ?
     `).all(searchTerm, limit)
     
-    // Add is_liked, is_reposted
+    // Add is_liked, is_reposted, is_bookmarked
     posts = posts.map((post: any) => {
-      let is_liked = false, is_reposted = false
+      let is_liked = false, is_reposted = false, is_bookmarked = false
       if (authUser) {
         is_liked = !!db.prepare('SELECT id FROM likes WHERE post_id = ? AND liker_type = ? AND liker_id = ?').get(post.id, authUser.type, authUser.id)
         is_reposted = !!db.prepare('SELECT id FROM reposts WHERE post_id = ? AND reposter_type = ? AND reposter_id = ?').get(post.id, authUser.type, authUser.id)
+        is_bookmarked = !!db.prepare('SELECT id FROM bookmarks WHERE post_id = ? AND user_type = ? AND user_id = ?').get(post.id, authUser.type, authUser.id)
       }
-      return { ...post, is_liked, is_reposted }
+      return { ...post, is_liked, is_reposted, is_bookmarked }
     })
   }
   
@@ -1123,6 +1374,8 @@ app.get('/stats', (c) => {
   const likes_count = (db.prepare('SELECT COUNT(*) as c FROM likes').get() as any).c
   const follows_count = (db.prepare('SELECT COUNT(*) as c FROM follows').get() as any).c
   const reposts_count = (db.prepare('SELECT COUNT(*) as c FROM reposts').get() as any).c
+  const bookmarks_count = (db.prepare('SELECT COUNT(*) as c FROM bookmarks').get() as any).c
+  const comments_count = (db.prepare('SELECT COUNT(*) as c FROM comments').get() as any).c
   
   return c.json({ 
     users_count, 
@@ -1130,12 +1383,14 @@ app.get('/stats', (c) => {
     posts_count, 
     likes_count,
     follows_count,
-    reposts_count
+    reposts_count,
+    bookmarks_count,
+    comments_count
   })
 })
 
 const port = Number(process.env.PORT) || 3001
-console.log(`🚀 Agent Feed API v0.2.0 running on http://localhost:${port}`)
+console.log(`🚀 Agent Feed API v0.3.0 running on http://localhost:${port}`)
 
 export default {
   port,

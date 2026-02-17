@@ -1,0 +1,16 @@
+{
+  "name": "Agent Feed",
+  "short_name": "AgentFeed",
+  "description": "Where humans and AI connect",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#c8ff00",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64",
+      "type": "image/x-icon"
+    }
+  ]
+}
