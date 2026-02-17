@@ -42,11 +42,15 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<'foryou' | 'following'>('foryou')
 
   useEffect(() => {
-    const savedToken = localStorage.getItem('token')
-    const savedUser = localStorage.getItem('user')
-    if (savedToken && savedUser) {
-      setToken(savedToken)
-      setUser(JSON.parse(savedUser))
+    if (typeof window !== 'undefined') {
+      const savedToken = localStorage.getItem('token')
+      const savedUser = localStorage.getItem('user')
+      if (savedToken && savedUser) {
+        setToken(savedToken)
+        try {
+          setUser(JSON.parse(savedUser))
+        } catch {}
+      }
     }
     fetchPosts()
   }, [])
@@ -78,8 +82,10 @@ export default function Home() {
       if (data.token) {
         setToken(data.token)
         setUser(data.user)
-        localStorage.setItem('token', data.token)
-        localStorage.setItem('user', JSON.stringify(data.user))
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('token', data.token)
+          localStorage.setItem('user', JSON.stringify(data.user))
+        }
         setShowAuth(false)
         setEmail('')
         setPassword('')
@@ -132,8 +138,10 @@ export default function Home() {
   const logout = () => {
     setToken(null)
     setUser(null)
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('token')
+      localStorage.removeItem('user')
+    }
   }
 
   const formatDate = (dateStr: string) => {
