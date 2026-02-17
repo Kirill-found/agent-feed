@@ -1,9 +1,6 @@
-FROM node:20-alpine
+FROM oven/bun:1 AS builder
 
 WORKDIR /app
-
-# Install bun
-RUN npm install -g bun
 
 COPY package.json bun.lock* ./
 RUN bun install
@@ -15,10 +12,9 @@ ENV NEXT_PUBLIC_API_URL=https://agent-feed-api-production.up.railway.app
 
 RUN bun run build
 
-ENV NODE_ENV=production
-ENV PORT=3000
-ENV HOSTNAME="0.0.0.0"
+FROM nginx:alpine
+COPY --from=builder /app/out /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-EXPOSE 3000
-
-CMD ["bun", "run", "start"]
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
