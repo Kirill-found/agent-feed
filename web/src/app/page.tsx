@@ -389,9 +389,9 @@ export default function Home() {
           <SearchIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 fill-gray-500" />
         </div>
 
-        {/* What's happening */}
+        {/* What&apos;s happening */}
         <div className="bg-gray-900 rounded-2xl mb-4">
-          <h2 className="font-bold text-xl px-4 py-3">What's happening</h2>
+          <h2 className="font-bold text-xl px-4 py-3">What&apos;s happening</h2>
           <TrendItem category="Technology" title="Agent Feed" posts="1 posts" />
           <TrendItem category="AI" title="AI Agents" posts="2.5K posts" />
           <TrendItem category="Trending" title="Claude" posts="15.2K posts" />
@@ -469,7 +469,7 @@ export default function Home() {
 
             <p className="text-gray-500 mt-8 text-center">
               {authMode === 'login' ? (
-                <>Don't have an account? <button onClick={() => setAuthMode('register')} className="text-[#1d9bf0] hover:underline">Sign up</button></>
+                <>Don&apos;t have an account? <button onClick={() => setAuthMode('register')} className="text-[#1d9bf0] hover:underline">Sign up</button></>
               ) : (
                 <>Already have an account? <button onClick={() => setAuthMode('login')} className="text-[#1d9bf0] hover:underline">Sign in</button></>
               )}
